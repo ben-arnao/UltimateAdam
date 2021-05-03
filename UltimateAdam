@@ -1,0 +1,152 @@
+import numpy as np
+
+
+# "Ultimate Adam" is an algorithm that attempts to combine many modern techniques into one optimizer
+# it also introduces a few novel techniques as well
+
+# Ultimate Adam automatically incorporates weight decay and reduce LR on plateau.
+
+# weight decay is defined via step ratio, as opposed to guessing that the correct flat percentage
+# we keep running averages of the weight and step magnitude (determined by 'beta_3')
+# we then use these to calculate weight decay % as a factor of the step size
+# a 'wd_ratio' ratio aims at on average, reducing the magnitude of a weight, by a 10th of the step magnitude
+
+# the running average of step magnitude is reset after every time the LR is reduced, mimicking the function of
+# decoupling weight decay, so that the amount a weight is decayed by does not exceed the step size (on average).
+
+# instead of smoothing like warmup/Radam, we also incorporate a novel methodology of smoothly transitioning
+# SGD into Adam, to solve the issue of variance in adaptive learn rates in the beginning stages of optimization
+# leading to a suboptimal optimization trajectory
+# the first step is 100% SGD and then the SGD component is reduced by 'alpha' percentage each step
+
+# UA also incorporates "belief", a technique used to essentially taker bigger steps when the gradient is closer to
+# our estimation. The user can turn this on or off. belief recommended a small epsilon. belief is turned on by
+# by default, and the eps is smaller by default as well
+
+class UltimateAdam:
+    def __init__(
+            self,
+            model=None,
+            set_weights=None,
+            get_weights=None,
+            get_loss=None,
+            get_outputs=None,
+            true_outputs=None,
+            input_samples=None,
+            lr=1e-3,
+            lr_decay_patience=10,
+            lr_decay_min_delta=1e-4,
+            beta_1=0.9,
+            beta_2=0.999,
+            beta_3=0.9,
+            epsilon=1e-12,
+            alpha=0.95,
+            wd_ratio=10,
+            use_belief=True):
+
+        self.model = model
+
+        self.set_weights = set_weights
+        self.get_weights = get_weights
+        self.get_loss = get_loss
+        self.get_outputs = get_outputs
+
+        self.true_outputs = true_outputs
+        self.input_samples = input_samples
+
+        self.lr = lr
+        self.lr_decay_patience = lr_decay_patience
+        self.lr_decay_min_delta = lr_decay_min_delta
+        self.beta_1 = beta_1
+        self.beta_2 = beta_2
+        self.beta_3 = beta_3
+        self.wd_ratio = wd_ratio
+        self.alpha = alpha
+        self.epsilon = epsilon
+        self.use_belief = use_belief
+
+        self.sgd_component = 1.0
+
+        self.avg_step_mag = 0
+        self.avg_weight_mag = 0
+
+        self.steps = 0
+
+        self.num_params = len(self.get_weights())
+
+        self.best_loss = float('inf')
+        self.lr_decay_wait = 0
+
+        self.m = np.zeros(len(self.get_weights(self.model)), dtype=np.float32)
+        self.v = np.zeros(len(self.get_weights(self.model)), dtype=np.float32)
+
+    def set_weights(self, model, weights):
+        raise NotImplementedError
+
+    def get_weights(self, model):
+        raise NotImplementedError
+
+    def get_loss(self, model, pred, true):
+        raise NotImplementedError
+
+    def get_outputs(self, model, inputs):
+        raise NotImplementedError
+
+    def update(self, grads):
+
+        # calculate momentum
+        self.m = self.beta_1 * self.m + (1.0 - self.beta_1) * grads
+
+        # calculate adaptive step
+        if self.use_belief:
+            self.v = self.beta_2 * self.v + (1.0 - self.beta_2) * np.square(grads - self.m)
+        else:
+            self.v = self.beta_2 * self.v + (1.0 - self.beta_2) * np.square(grads)
+
+        # correct bias (mostly affects initial steps)
+        m_corr_t = self.m / (1.0 - np.power(self.beta_1, self.steps))
+        v_corr_t = self.v / (1.0 - np.power(self.beta_2, self.steps))
+
+        # calculate step
+        momemtum_component = m_corr_t * self.sgd_component
+        adaptive_component = (m_corr_t / (np.sqrt(v_corr_t) + self.epsilon)) * (1 - self.sgd_component)
+        step = (momemtum_component + adaptive_component) * self.lr
+
+        # transform SGD into Adam
+        self.sgd_component *= self.alpha
+
+        # take step
+        new_weights = self.get_weights(self.model) - step
+
+        # keep running averages of step/weight mag for calculating weight decay value from ratio
+        avg_step_mag = np.mean(np.abs(step))
+        avg_weight_mag = np.mean(np.abs(new_weights))
+        self.avg_step_mag = self.avg_step_mag * self.beta_3 + avg_step_mag * (1 - self.beta_3)
+        self.avg_weight_mag = self.avg_weight_mag * self.beta_3 + avg_weight_mag * (1 - self.beta_3)
+
+        # calculate weight decay value
+        wd_val = (self.avg_step_mag * 1 / self.wd_ratio) / self.avg_weight_mag
+
+        # decay weights
+        new_weights *= (1 - wd_val)
+
+        # set the weights
+        self.set_weights(self.model, new_weights)
+
+        # calculate loss on new weights, for used in lowering LR
+        loss = self.get_loss(self.model, self.get_outputs(self.model, self.input_samples), self.true_outputs)
+
+        if loss > self.best_loss + self.lr_decay_min_delta:
+            self.best_loss = loss
+            self.lr_decay_wait = 0
+        else:
+            self.lr_decay_wait += 1
+
+        if self.lr_decay_wait >= self.lr_decay_patience:
+            self.lr_decay_wait = 0
+            self.lr /= 10
+
+            # reset step mag as we are now taking smaller steps
+            self.avg_step_mag = 0
+
+        self.steps += 1

@@ -7,6 +7,7 @@ import numpy as np
 # Ultimate Adam automatically incorporates weight decay and reduce LR on plateau.
 
 # weight decay is defined via step ratio, as opposed to guessing that the correct flat percentage
+# as different experiments have different step sizes.
 # we keep running averages of the weight and step magnitude (determined by 'beta_3')
 # we then use these to calculate weight decay % as a factor of the step size
 # a 'wd_ratio' ratio aims at on average, reducing the magnitude of a weight, by a 10th of the step magnitude

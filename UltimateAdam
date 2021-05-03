@@ -10,7 +10,7 @@ import numpy as np
 # as different experiments have different step sizes.
 # we keep running averages of the weight and step magnitude (determined by 'beta_3')
 # we then use these to calculate weight decay % as a factor of the step size
-# a 'wd_ratio' ratio aims at on average, reducing the magnitude of a weight, by a 10th of the step magnitude
+# a 'wd_ratio' of 10 for example aims at (on average) reducing the magnitude of a weight by a 10th of the step magnitude
 
 # the running average of step magnitude is reset after every time the LR is reduced, mimicking the function of
 # decoupling weight decay, so that the amount a weight is decayed by does not exceed the step size (on average).

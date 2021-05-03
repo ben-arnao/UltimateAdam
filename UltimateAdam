@@ -15,7 +15,7 @@ import numpy as np
 # the running average of step magnitude is reset after every time the LR is reduced, mimicking the function of
 # decoupling weight decay, so that the amount a weight is decayed by does not exceed the step size (on average).
 
-# instead of smoothing like warmup/Radam, we also incorporate a novel methodology of smoothly transitioning
+# instead of warmup/Radam, we also incorporate a novel methodology of smoothly transitioning
 # SGD into Adam, to solve the issue of variance in adaptive learn rates in the beginning stages of optimization
 # leading to a suboptimal optimization trajectory
 # the first step is 100% SGD and then the SGD component is reduced by 'alpha' percentage each step

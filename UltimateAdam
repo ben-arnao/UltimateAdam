@@ -5,7 +5,7 @@ import numpy as np
 
 # UA automatically incorporates weight decay and reduce LR on plateau. Weight decay is reduced
 # along with LR by the same proportion, such that the user only needs to find the best starting LR
-# and weight decay value.
+# to starting weight decay ratio.
 
 # instead of warmup/Radam, we also incorporate a novel methodology of smoothly transitioning
 # SGD into Adam, to solve the issue of variance in adaptive learn rates in the beginning stages of optimization

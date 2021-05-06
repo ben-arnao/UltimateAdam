@@ -30,6 +30,7 @@ class UltimateAdam:
             lr=1e-3,
             lr_decay_patience=10,
             lr_decay_min_delta=1e-4,
+            min_lr=1e-6
             beta_1=0.9,
             beta_2=0.999,
             epsilon=1e-12,
@@ -65,6 +66,7 @@ class UltimateAdam:
 
         self.best_loss = float('inf')
         self.lr_decay_wait = 0
+        self.no_improvement_wait = 0
 
         self.m = np.zeros(len(self.get_weights(self.model)), dtype=np.float32)
         self.v = np.zeros(len(self.get_weights(self.model)), dtype=np.float32)
@@ -119,12 +121,19 @@ class UltimateAdam:
         if loss > self.best_loss + self.lr_decay_min_delta:
             self.best_loss = loss
             self.lr_decay_wait = 0
+            self.no_improvement_wait = 0
         else:
             self.lr_decay_wait += 1
+            self.no_improvement_wait += 1
+            
+        if self.no_improvement_wait >= self.lr_decay_patience * 2:
+            print('model is fully trained (no improvement)')
 
         if self.lr_decay_wait >= self.lr_decay_patience:
             self.lr_decay_wait = 0
             self.lr /= 10
+            if self.lr < self.min_lr:
+                self.lr = self.min_lr
 
             # reduce weight decay for the same proportion as LR
             self.weight_decay /= 10

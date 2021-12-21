@@ -15,126 +15,227 @@ import numpy as np
 # a technique used to taker bigger steps when the gradient is closer to our estimation. 
 # The belief paper recommends a smaller epsilon.
 # belief is turned on by default, and the eps is smaller by default as well
+import tensorflow as tf
+from tensorflow_addons.utils.types import FloatTensorLike
+import numpy as np
+from tensorflow.python.keras import backend
+from tensorflow.python.platform import tf_logging as logging
+from tensorflow.keras.callbacks import Callback
 
-class UltimateAdam:
+
+class ReduceLROnPlateau(Callback):
+
+    def __init__(self,
+                 monitor='val_loss',
+                 factor=0.1,
+                 patience=10,
+                 verbose=0,
+                 mode='auto',
+                 min_delta=1e-4,
+                 cooldown=0,
+                 min_lr=0,
+                 **kwargs):
+        super(ReduceLROnPlateau, self).__init__()
+
+        self.monitor = monitor
+        if factor >= 1.0:
+            raise ValueError('ReduceLROnPlateau ' 'does not support a factor >= 1.0.')
+        if 'epsilon' in kwargs:
+            min_delta = kwargs.pop('epsilon')
+            logging.warning('`epsilon` argument is deprecated and '
+                            'will be removed, use `min_delta` instead.')
+        self.factor = factor
+        self.min_lr = min_lr
+        self.min_delta = min_delta
+        self.patience = patience
+        self.verbose = verbose
+        self.cooldown = cooldown
+        self.cooldown_counter = 0  # Cooldown counter.
+        self.wait = 0
+        self.best = 0
+        self.mode = mode
+        self.monitor_op = None
+        self._reset()
+
+    def _reset(self):
+        """Resets wait counter and cooldown counter.
+        """
+        if self.mode not in ['auto', 'min', 'max']:
+            logging.warning('Learning rate reduction mode %s is unknown, '
+                            'fallback to auto mode.', self.mode)
+            self.mode = 'auto'
+        if (self.mode == 'min' or
+                (self.mode == 'auto' and 'acc' not in self.monitor)):
+            self.monitor_op = lambda a, b: np.less(a, b - self.min_delta)
+            self.best = np.Inf
+        else:
+            self.monitor_op = lambda a, b: np.greater(a, b + self.min_delta)
+            self.best = -np.Inf
+        self.cooldown_counter = 0
+        self.wait = 0
+
+    def on_train_begin(self, logs=None):
+        self._reset()
+
+    def on_epoch_end(self, epoch, logs=None):
+        logs = logs or {}
+        logs['lr'] = backend.get_value(self.model.optimizer.learning_rate)
+        current = logs.get(self.monitor)
+        if current is None:
+            logging.warning('Learning rate reduction is conditioned on metric `%s` '
+                            'which is not available. Available metrics are: %s',
+                            self.monitor, ','.join(list(logs.keys())))
+
+        else:
+            if self.in_cooldown():
+                self.cooldown_counter -= 1
+                self.wait = 0
+
+            if self.monitor_op(current, self.best):
+                self.best = current
+                self.wait = 0
+            elif not self.in_cooldown():
+                self.wait += 1
+                if self.wait >= self.patience:
+                    old_lr = backend.get_value(self.model.optimizer.learning_rate)
+                    if old_lr > np.float32(self.min_lr):
+                        new_lr = old_lr * self.factor
+                        new_lr = max(new_lr, self.min_lr)
+                        backend.set_value(self.model.optimizer.learning_rate, new_lr)
+                        if self.verbose > 0:
+                            print('\nEpoch %05d: ReduceLROnPlateau reducing learning '
+                                  'rate to %s.' % (epoch + 1, new_lr))
+                        self.cooldown_counter = self.cooldown
+                        self.wait = 0
+
+    def in_cooldown(self):
+        return self.cooldown_counter > 0
+
+
+class UltimateAdam(tf.keras.optimizers.Optimizer):
+
     def __init__(
             self,
-            model=None,
-            set_weights=None,
-            get_weights=None,
-            get_loss=None,
-            get_outputs=None,
-            true_outputs=None,
-            input_samples=None,
-            lr=1e-3,
-            lr_decay_patience=10,
-            lr_decay_min_delta=1e-4,
-            min_lr=1e-6
-            beta_1=0.9,
-            beta_2=0.999,
-            epsilon=1e-12,
-            alpha=0.95,
-            weight_decay=1e-3,
-            use_belief=True):
+            learning_rate: FloatTensorLike = 0.001,
+            weight_decay: FloatTensorLike = 0.00001,
+            sgd_to_adam_factor: FloatTensorLike = 0.9,
+            beta_1: FloatTensorLike = 0.9,
+            beta_2: FloatTensorLike = 0.999,
+            epsilon: FloatTensorLike = 1e-14,
+            use_belief=False,
+            weight_decay_reduce=False,
+            name: str = "UltimateAdam",
+            **kwargs,
+    ):
 
-        self.model = model
+        super().__init__(name, **kwargs)
+        self._init_lr = learning_rate
+        self._set_hyper("learning_rate", learning_rate)
+        self._set_hyper("weight_decay", weight_decay)
+        self._set_hyper("beta_1", beta_1)
+        self._set_hyper("beta_2", beta_2)
+        self.epsilon = epsilon or tf.keras.backend.epsilon()
+        self._sgd_to_adam_factor = sgd_to_adam_factor
+        self._use_belief = use_belief
+        self._weight_decay_reduce = weight_decay_reduce
+        self._has_weight_decay = weight_decay != 0.0
 
-        self.set_weights = set_weights
-        self.get_weights = get_weights
-        self.get_loss = get_loss
-        self.get_outputs = get_outputs
+    def _create_slots(self, var_list):
+        for var in var_list:
+            self.add_slot(var, "m")
+        for var in var_list:
+            self.add_slot(var, "v")
 
-        self.true_outputs = true_outputs
-        self.input_samples = input_samples
+    def set_weights(self, weights):
+        params = self.weights
+        num_vars = int((len(params) - 1) / 2)
+        if len(weights) == 3 * num_vars + 1:
+            weights = weights[: len(params)]
+        super().set_weights(weights)
 
-        self.lr = lr
-        self.lr_decay_patience = lr_decay_patience
-        self.lr_decay_min_delta = lr_decay_min_delta
-        self.beta_1 = beta_1
-        self.beta_2 = beta_2
-        self.weight_decay = weight_decay
-        self.alpha = alpha
-        self.epsilon = epsilon
-        self.use_belief = use_belief
+    def _resource_apply_dense(self, grad, var):
+        var_dtype = var.dtype.base_dtype
+        lr = self._get_hyper("learning_rate", var_dtype)
+        wd = self._get_hyper("weight_decay", var_dtype)
+        m = self.get_slot(var, "m")
+        v = self.get_slot(var, "v")
+        beta_1_t = self._get_hyper("beta_1", var_dtype)
+        beta_2_t = self._get_hyper("beta_2", var_dtype)
+        epsilon_t = tf.convert_to_tensor(self.epsilon, var_dtype)
+        local_step = tf.cast(self.iterations + 1, var_dtype)
+        beta_1_power = tf.pow(beta_1_t, local_step)
+        beta_2_power = tf.pow(beta_2_t, local_step)
 
-        self.sgd_component = 1.0
+        m_t = m.assign(
+            beta_1_t * m + (1.0 - beta_1_t) * grad, use_locking=self._use_locking
+        )
+        m_corr_t = m_t / (1.0 - beta_1_power)
 
-        self.steps = 0
-
-        self.num_params = len(self.get_weights())
-
-        self.best_loss = float('inf')
-        self.lr_decay_wait = 0
-        self.no_improvement_wait = 0
-
-        self.m = np.zeros(len(self.get_weights(self.model)), dtype=np.float32)
-        self.v = np.zeros(len(self.get_weights(self.model)), dtype=np.float32)
-
-    def set_weights(self, model, weights):
-        raise NotImplementedError
-
-    def get_weights(self, model):
-        raise NotImplementedError
-
-    def get_loss(self, model, pred, true):
-        raise NotImplementedError
-
-    def get_outputs(self, model, inputs):
-        raise NotImplementedError
-
-    def update(self, grads):
-
-        # calculate momentum
-        self.m = self.beta_1 * self.m + (1.0 - self.beta_1) * grads
-
-        # calculate adaptive step
-        if self.use_belief:
-            self.v = self.beta_2 * self.v + (1.0 - self.beta_2) * np.square(grads - self.m)
+        if self._use_belief:
+            v_t = v.assign(
+                beta_2_t * v + (1.0 - beta_2_t) * tf.math.square(grad - m_t) + epsilon_t,
+                use_locking=self._use_locking,
+            )
         else:
-            self.v = self.beta_2 * self.v + (1.0 - self.beta_2) * np.square(grads)
+            v_t = v.assign(
+                beta_2_t * v + (1.0 - beta_2_t) * tf.math.square(grad) + epsilon_t,
+                use_locking=self._use_locking,
+            )
+        v_corr_t = tf.sqrt(v_t / (1.0 - beta_2_power))
 
-        # correct bias (mostly affects initial steps)
-        m_corr_t = self.m / (1.0 - np.power(self.beta_1, self.steps))
-        v_corr_t = self.v / (1.0 - np.power(self.beta_2, self.steps))
+        sgd_ratio = tf.math.pow(self._sgd_to_adam_factor, tf.cast(self.iterations, tf.float32))
 
         # calculate step
-        momemtum_component = m_corr_t * self.sgd_component
-        adaptive_component = (m_corr_t / (np.sqrt(v_corr_t) + self.epsilon)) * (1 - self.sgd_component)
-        step = (momemtum_component + adaptive_component) * self.lr
+        # sgd step = m_corr_t
+        momemtum_component = m_corr_t * sgd_ratio
 
-        # transform SGD into Adam
-        self.sgd_component *= self.alpha
+        # adam step = m_corr_t / (v_corr_t + epsilon_t)
+        adaptive_component = (m_corr_t / (tf.math.sqrt(v_corr_t) + epsilon_t)) * (1 - sgd_ratio)
 
-        # take step
-        new_weights = self.get_weights(self.model) - step
+        if self._weight_decay_reduce:
 
-        # decay weights
-        new_weights *= (1 - self.weight_decay)
+            # combine into final step
+            step = (momemtum_component + adaptive_component) * lr
 
-        # set the weights
-        self.set_weights(self.model, new_weights)
+            # modify step by weight decay
+            if self._has_weight_decay:
+                step += wd * (1 / self._init_lr) * lr * var
 
-        # calculate loss on new weights, for used in lowering LR
-        loss = self.get_loss(self.model, self.get_outputs(self.model, self.input_samples), self.true_outputs)
-
-        if loss > self.best_loss + self.lr_decay_min_delta:
-            self.best_loss = loss
-            self.lr_decay_wait = 0
-            self.no_improvement_wait = 0
+            var_update = var.assign_sub(step, use_locking=self._use_locking)
         else:
-            self.lr_decay_wait += 1
-            self.no_improvement_wait += 1
-            
-        if self.no_improvement_wait >= self.lr_decay_patience * 2:
-            print('model is fully trained (no improvement)')
 
-        if self.lr_decay_wait >= self.lr_decay_patience:
-            self.lr_decay_wait = 0
-            self.lr /= 10
-            if self.lr < self.min_lr:
-                self.lr = self.min_lr
+            # combine into final step
+            step = momemtum_component + adaptive_component
 
-            # reduce weight decay for the same proportion as LR
-            self.weight_decay /= 10
+            # modify step by weight decay
+            if self._has_weight_decay:
+                step += wd * var
 
-        self.steps += 1
+            var_update = var.assign_sub(step * lr, use_locking=self._use_locking)
+
+        updates = [var_update, m_t, v_t]
+        return tf.group(*updates)
+
+    #
+    # def get_config(self):
+    #     config = super().get_config()
+    #     config.update(
+    #         {
+    #             "learning_rate": self._serialize_hyperparameter("learning_rate"),
+    #             "beta_1": self._serialize_hyperparameter("beta_1"),
+    #             "beta_2": self._serialize_hyperparameter("beta_2"),
+    #             "decay": self._serialize_hyperparameter("decay"),
+    #             "weight_decay": self._serialize_hyperparameter("weight_decay"),
+    #             "sma_threshold": self._serialize_hyperparameter("sma_threshold"),
+    #             "epsilon": self.epsilon,
+    #             "amsgrad": self.amsgrad,
+    #             "rectify": self.rectify,
+    #             "total_steps": self._serialize_hyperparameter("total_steps"),
+    #             "warmup_proportion": self._serialize_hyperparameter(
+    #                 "warmup_proportion"
+    #             ),
+    #             "min_lr": self._serialize_hyperparameter("min_lr"),
+    #         }
+    #     )
+    #     return config
+

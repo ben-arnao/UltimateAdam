@@ -1,20 +1,3 @@
-import numpy as np
-
-
-# "Ultimate Adam" is an algorithm that attempts to combine many modern techniques into one clean optimizer
-
-# UA automatically incorporates weight decay and reduce LR on plateau. Weight decay is reduced
-# along with LR by the same proportion, such that the user only needs to find the best LR/weight decay ratio.
-
-# instead of warmup/Radam, we also incorporate a novel methodology of smoothly transitioning
-# SGD into Adam, to solve the issue of variance in adaptive learn rates in the beginning stages of optimization
-# leading to a suboptimal optimization trajectory.
-# the first step is 100% SGD and then the SGD component is reduced by 'alpha' percentage each step after
-
-# UA also incorporates the ability to turn on "belief", 
-# a technique used to taker bigger steps when the gradient is closer to our estimation. 
-# The belief paper recommends a smaller epsilon.
-# belief is turned on by default, and the eps is smaller by default as well
 import tensorflow as tf
 from tensorflow_addons.utils.types import FloatTensorLike
 import numpy as np
@@ -23,93 +6,24 @@ from tensorflow.python.platform import tf_logging as logging
 from tensorflow.keras.callbacks import Callback
 
 
-class ReduceLROnPlateau(Callback):
+# "Ultimate Adam" is an algorithm that attempts to combine many modern techniques into one clean optimizer for Tensorflow
 
-    def __init__(self,
-                 monitor='val_loss',
-                 factor=0.1,
-                 patience=10,
-                 verbose=0,
-                 mode='auto',
-                 min_delta=1e-4,
-                 cooldown=0,
-                 min_lr=0,
-                 **kwargs):
-        super(ReduceLROnPlateau, self).__init__()
+# It is recommended to use the ReduceLROnPlatuea Callback with UA.
 
-        self.monitor = monitor
-        if factor >= 1.0:
-            raise ValueError('ReduceLROnPlateau ' 'does not support a factor >= 1.0.')
-        if 'epsilon' in kwargs:
-            min_delta = kwargs.pop('epsilon')
-            logging.warning('`epsilon` argument is deprecated and '
-                            'will be removed, use `min_delta` instead.')
-        self.factor = factor
-        self.min_lr = min_lr
-        self.min_delta = min_delta
-        self.patience = patience
-        self.verbose = verbose
-        self.cooldown = cooldown
-        self.cooldown_counter = 0  # Cooldown counter.
-        self.wait = 0
-        self.best = 0
-        self.mode = mode
-        self.monitor_op = None
-        self._reset()
+# UA automatically incorporates weight decay and provides the user an option 'weight_decay_reduce' that determines 
+# whether or not weight decay is reduced along with LR.
 
-    def _reset(self):
-        """Resets wait counter and cooldown counter.
-        """
-        if self.mode not in ['auto', 'min', 'max']:
-            logging.warning('Learning rate reduction mode %s is unknown, '
-                            'fallback to auto mode.', self.mode)
-            self.mode = 'auto'
-        if (self.mode == 'min' or
-                (self.mode == 'auto' and 'acc' not in self.monitor)):
-            self.monitor_op = lambda a, b: np.less(a, b - self.min_delta)
-            self.best = np.Inf
-        else:
-            self.monitor_op = lambda a, b: np.greater(a, b + self.min_delta)
-            self.best = -np.Inf
-        self.cooldown_counter = 0
-        self.wait = 0
+# Instead of warmup/Radam, we also incorporate a novel methodology of smoothly transitioning
+# SGD into Adam, to solve the issue of variance in adaptive learn rates in the beginning stages of optimization
+# leading to a suboptimal optimization trajectory.
+# the first step is 100% SGD and then the SGD component is reduced by 'alpha' percentage each step after.
+# Some studies have shown Adam to converge to better minima than SGD in cases where the early stage variance is
+# dealt with.
 
-    def on_train_begin(self, logs=None):
-        self._reset()
-
-    def on_epoch_end(self, epoch, logs=None):
-        logs = logs or {}
-        logs['lr'] = backend.get_value(self.model.optimizer.learning_rate)
-        current = logs.get(self.monitor)
-        if current is None:
-            logging.warning('Learning rate reduction is conditioned on metric `%s` '
-                            'which is not available. Available metrics are: %s',
-                            self.monitor, ','.join(list(logs.keys())))
-
-        else:
-            if self.in_cooldown():
-                self.cooldown_counter -= 1
-                self.wait = 0
-
-            if self.monitor_op(current, self.best):
-                self.best = current
-                self.wait = 0
-            elif not self.in_cooldown():
-                self.wait += 1
-                if self.wait >= self.patience:
-                    old_lr = backend.get_value(self.model.optimizer.learning_rate)
-                    if old_lr > np.float32(self.min_lr):
-                        new_lr = old_lr * self.factor
-                        new_lr = max(new_lr, self.min_lr)
-                        backend.set_value(self.model.optimizer.learning_rate, new_lr)
-                        if self.verbose > 0:
-                            print('\nEpoch %05d: ReduceLROnPlateau reducing learning '
-                                  'rate to %s.' % (epoch + 1, new_lr))
-                        self.cooldown_counter = self.cooldown
-                        self.wait = 0
-
-    def in_cooldown(self):
-        return self.cooldown_counter > 0
+# UA also incorporates the ability to turn on "belief", 
+# a technique used to taker bigger steps when the gradient is closer to our estimation. 
+# The belief paper recommends a smaller epsilon.
+# belief is turned on by default, and the eps is smaller by default as well
 
 
 class UltimateAdam(tf.keras.optimizers.Optimizer):
@@ -215,27 +129,4 @@ class UltimateAdam(tf.keras.optimizers.Optimizer):
 
         updates = [var_update, m_t, v_t]
         return tf.group(*updates)
-
-    #
-    # def get_config(self):
-    #     config = super().get_config()
-    #     config.update(
-    #         {
-    #             "learning_rate": self._serialize_hyperparameter("learning_rate"),
-    #             "beta_1": self._serialize_hyperparameter("beta_1"),
-    #             "beta_2": self._serialize_hyperparameter("beta_2"),
-    #             "decay": self._serialize_hyperparameter("decay"),
-    #             "weight_decay": self._serialize_hyperparameter("weight_decay"),
-    #             "sma_threshold": self._serialize_hyperparameter("sma_threshold"),
-    #             "epsilon": self.epsilon,
-    #             "amsgrad": self.amsgrad,
-    #             "rectify": self.rectify,
-    #             "total_steps": self._serialize_hyperparameter("total_steps"),
-    #             "warmup_proportion": self._serialize_hyperparameter(
-    #                 "warmup_proportion"
-    #             ),
-    #             "min_lr": self._serialize_hyperparameter("min_lr"),
-    #         }
-    #     )
-    #     return config
 

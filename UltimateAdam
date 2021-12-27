@@ -8,17 +8,17 @@ from tensorflow.keras.callbacks import Callback
 
 # "Ultimate Adam" is an algorithm that attempts to combine many modern techniques into one clean optimizer for Tensorflow
 
-# It is recommended to use the ReduceLROnPlatuea Callback with UA.
+# It is recommended to use the ReduceLROnPlatuea Callback with UA, as opposed to reducing LR on a fixed schedule of steps.
 
 # UA automatically incorporates weight decay and provides the user an option 'weight_decay_reduce' that determines 
 # whether or not weight decay is reduced along with LR.
 
-# Instead of warmup/Radam, we also incorporate a novel methodology of smoothly transitioning
-# SGD into Adam, to solve the issue of variance in adaptive learn rates in the beginning stages of optimization
-# leading to a suboptimal optimization trajectory.
+# Instead of warmup/Radam, we also incorporate a novel methodology of smoothly transitioning SGD into Adam, 
+# to solve the issue of variance in adaptive learn rates in the beginning stages of optimization leading to 
+# a suboptimal optimization trajectory.
 # the first step is 100% SGD and then the SGD component is reduced by 'alpha' percentage each step after.
-# Some studies have shown Adam to converge to better minima than SGD in cases where the early stage variance is
-# dealt with.
+# Some sexperiments have shown Adam to converge to a better final global minima than SGD 
+# in cases where the early stage variance is handled.
 
 # UA also incorporates the ability to turn on "belief", 
 # a technique used to taker bigger steps when the gradient is closer to our estimation. 

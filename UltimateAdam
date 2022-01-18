@@ -1,9 +1,5 @@
 import tensorflow as tf
 from tensorflow_addons.utils.types import FloatTensorLike
-import numpy as np
-from tensorflow.python.keras import backend
-from tensorflow.python.platform import tf_logging as logging
-from tensorflow.keras.callbacks import Callback
 
 
 # "Ultimate Adam" is an algorithm that attempts to combine many modern techniques into one clean optimizer for Tensorflow

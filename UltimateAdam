@@ -22,13 +22,13 @@ class UltimateAdam(tf.keras.optimizers.Optimizer):
     def __init__(
             self,
             learning_rate: FloatTensorLike = 0.001,
-            weight_decay: FloatTensorLike = 0.00001,
+            weight_decay: FloatTensorLike = 0.001,
             sgd_to_adam_factor: FloatTensorLike = 0.9,
             beta_1: FloatTensorLike = 0.9,
             beta_2: FloatTensorLike = 0.999,
             epsilon: FloatTensorLike = 1e-14,
             use_belief=False,
-            weight_decay_reduce=False,
+            weight_decay_reduce=True,
             name: str = "UltimateAdam",
             **kwargs,
     ):

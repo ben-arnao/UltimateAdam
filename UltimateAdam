@@ -2,24 +2,6 @@ import tensorflow as tf
 from tensorflow_addons.utils.types import FloatTensorLike
 
 
-# "Ultimate Adam" is an algorithm that attempts to combine many modern techniques into one clean optimizer for Tensorflow
-
-# It is recommended to use the ReduceLROnPlatuea Callback with UA, as opposed to reducing LR on a fixed schedule of steps.
-
-# UA automatically incorporates weight decay and provides the user an option to decouple wd ('weight_decay_reduce') that determines 
-# whether or not weight decay is reduced along with LR.
-
-# Instead of warmup/Radam, we also incorporate a novel methodology of smoothly transitioning SGD into Adam, 
-# to solve the issue of variance in adaptive learn rates in the beginning stages of optimization leading to 
-# a suboptimal optimization trajectory.
-# the first step is 100% SGD and then the SGD component is reduced by 'alpha' percentage each step after.
-# Some experiments have shown Adam to converge to a better final global minima than SGD 
-# in cases where the early stage variance is dealt with.
-
-# UA also incorporates the ability to turn on "belief", 
-# a technique used to taker bigger steps when the gradient is closer to our estimation.
-
-
 class UltimateAdam(tf.keras.optimizers.Optimizer):
 
     def __init__(
@@ -124,3 +106,44 @@ class UltimateAdam(tf.keras.optimizers.Optimizer):
         updates = [var_update, m_t, v_t]
         return tf.group(*updates)
 
+    def get_config(self):
+        config = super().get_config()
+        config.update(
+            {
+                "learning_rate": self._serialize_hyperparameter("learning_rate"),
+            }
+        )
+        return config
+
+# need to make sure reduce LR callback uses "self.model.optimizer.learning_rate" not "self.model.optimizer.lr"
+
+#   def on_epoch_end(self, epoch, logs=None):
+#     logs = logs or {}
+#     logs['lr'] = backend.get_value(self.model.optimizer.learning_rate)
+#     current = logs.get(self.monitor)
+#     if current is None:
+#       logging.warning('Learning rate reduction is conditioned on metric `%s` '
+#                       'which is not available. Available metrics are: %s',
+#                       self.monitor, ','.join(list(logs.keys())))
+#
+#     else:
+#       if self.in_cooldown():
+#         self.cooldown_counter -= 1
+#         self.wait = 0
+#
+#       if self.monitor_op(current, self.best):
+#         self.best = current
+#         self.wait = 0
+#       elif not self.in_cooldown():
+#         self.wait += 1
+#         if self.wait >= self.patience:
+#           old_lr = backend.get_value(self.model.optimizer.learning_rate)
+#           if old_lr > np.float32(self.min_lr):
+#             new_lr = old_lr * self.factor
+#             new_lr = max(new_lr, self.min_lr)
+#             backend.set_value(self.model.optimizer.learning_rate, new_lr)
+#             if self.verbose > 0:
+#               print('\nEpoch %05d: ReduceLROnPlateau reducing learning '
+#                     'rate to %s.' % (epoch + 1, new_lr))
+#             self.cooldown_counter = self.cooldown
+#             self.wait = 0
